@@ -1,107 +1,181 @@
-/**
- * Ethereal Clouds Sketch
- * Organic, randomly placed cloud-like objects using Perlin noise and soft gradients.
+/*
+ * CONTEXT: p5.js Creative Coding
+ * GOAL: SVGロゴの各円をパーティクルとして定義し、
+ *       音が広がるようにゆるやかに飛散するアニメーション
  */
 
-let clouds = [];
+let particles = [];
+let svgLoaded = false;
+let disperseStartTime = 500; // 3秒後に広がり始める
+let startTime;
+
+const SVG_WIDTH = 854;
+const SVG_HEIGHT = 477;
 
 function setup() {
-    createCanvas(windowWidth, windowHeight);
-    colorMode(HSB, 360, 100, 100, 1);
+  createCanvas(windowWidth, windowHeight);
+  startTime = millis();
+
+  fetch('logosvg.svg')
+    .then(res => res.text())
+    .then(svgText => {
+      parseSVG(svgText);
+      svgLoaded = true;
+    });
+}
+
+function parseSVG(svgText) {
+  let parser = new DOMParser();
+  let doc = parser.parseFromString(svgText, 'image/svg+xml');
+  let paths = doc.querySelectorAll('path');
+
+  // 一時SVGをDOMに追加してBBox計算
+  let tempSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  tempSvg.setAttribute('width', SVG_WIDTH);
+  tempSvg.setAttribute('height', SVG_HEIGHT);
+  tempSvg.setAttribute('viewBox', '0 0 ' + SVG_WIDTH + ' ' + SVG_HEIGHT);
+  tempSvg.style.position = 'absolute';
+  tempSvg.style.top = '-9999px';
+  tempSvg.style.left = '-9999px';
+  document.body.appendChild(tempSvg);
+
+  // ロゴの中心を計算
+  let logoCenterX = SVG_WIDTH / 2;
+  let logoCenterY = SVG_HEIGHT / 2;
+
+  paths.forEach((pathEl) => {
+    let cloned = pathEl.cloneNode(true);
+    tempSvg.appendChild(cloned);
+
+    let bbox = cloned.getBBox();
+    let cx = bbox.x + bbox.width / 2;
+    let cy = bbox.y + bbox.height / 2;
+    let r = Math.max(bbox.width, bbox.height) / 2;
+
+    let hasClass = pathEl.classList.contains('cls-1');
+    let fillColor = hasClass ? '#005991' : '#000000';
+
+    // 中心からの距離（波紋の遅延計算用）
+    let dx = cx - logoCenterX;
+    let dy = cy - logoCenterY;
+    let distFromCenter = Math.sqrt(dx * dx + dy * dy);
+
+    particles.push(new Particle(cx, cy, r, fillColor, distFromCenter));
+
+    tempSvg.removeChild(cloned);
+  });
+
+  document.body.removeChild(tempSvg);
+}
+
+class Particle {
+  constructor(x, y, r, col, distFromCenter) {
+    this.originalX = x;
+    this.originalY = y;
+    this.r = r;
+    this.col = col;
+    this.distFromCenter = distFromCenter;
+
+    // 散らばる方向（中心からの角度 + 少しランダム）
+    let angle = Math.atan2(
+      y - SVG_HEIGHT / 2,
+      x - SVG_WIDTH / 2
+    ) + (Math.random() - 0.5) * 4;
+
+    this.dirX = Math.cos(angle);
+    this.dirY = Math.sin(angle);
+
+    // 散らばる速度（ゆるやかに）
+    this.speed = 0.3 + Math.random() * 2;
+
+    // 現在のオフセット
+    this.offsetX = 0;
+    this.offsetY = 0;
+
+    // 不透明度
+    this.alpha = 255;
+  }
+
+  update(progress) {
+    // progressは0〜1の往復（0=ロゴ状態, 1=広がりきった状態）
+    // ループ側の計算で、ロゴ状態で長く・広がった状態で短くなるよう調整済みなので、
+    // ここでは素直に progress を移動量に反映させる（少しだけease-outを残す）
+    let eased = progress; // または 1 - Math.pow(1 - progress, 2) などで微調整可能
+
+    // 移動量
+    let moveAmount = eased * 800 * this.speed;
+    this.offsetX = this.dirX * moveAmount;
+    this.offsetY = this.dirY * moveAmount;
+
+    // スケール（広がったときにサイズを大きくする）
+    // 元のサイズの最大3倍まで大きくなるように設定（好みで数値を調整）
+    this.currentR = this.r * (1 + progress * 4);
+
+    // フェードアウト（ゆるやかに透過する）
+    this.alpha = lerp(255, 255, progress);
+  }
+
+  display(scl, baseOffsetX, baseOffsetY) {
+    if (this.alpha <= 0) return;
+
+    let drawX = (this.originalX * scl + baseOffsetX) + this.offsetX * scl;
+    let drawY = (this.originalY * scl + baseOffsetY) + this.offsetY * scl;
+
+    // progressに基づいた現在の半径を使う
+    let rToUse = this.currentR !== undefined ? this.currentR : this.r;
+    let drawR = rToUse * scl;
+
     noStroke();
-
-    // Initialize a set of clouds
-    for (let i = 0; i < 15; i++) {
-        clouds.push(new Cloud());
-    }
-}
-
-function draw() {
-    // Beautiful sky gradient
-    drawSky();
-
-    fill("#ffff00");
-    noStroke();
-    textAlign(LEFT, TOP);
-    textSize(12);
-    text('p5.jsで記述して。キャンバス上を覆う雲のようなオブジェクトをランダムに配置して。', 5, 5);
-
-    // Update and show clouds
-    for (let cloud of clouds) {
-        cloud.update();
-        cloud.display();
-    }
-}
-
-function drawSky() {
-    // Draw a radial or linear gradient background for the sky
-    for (let y = 0; y < height; y++) {
-        let inter = map(y, 0, height, 0, 1);
-        let c = lerpColor(color(210, 80, 20), color(220, 40, 60), inter);
-        stroke(c);
-        line(0, y, width, y);
-    }
-}
-
-class Cloud {
-    constructor() {
-        this.init();
-    }
-
-    init() {
-        this.x = random(-200, width + 200);
-        this.y = random(0, height * 0.7);
-        this.speed = random(0.2, 1.0);
-        this.size = random(100, 300);
-        this.numCircles = floor(random(15, 30));
-        this.offsets = [];
-        this.colors = [];
-
-        // Create random offsets for each circle in the cloud to make it "fluffy"
-        for (let i = 0; i < this.numCircles; i++) {
-            this.offsets.push({
-                x: random(-this.size * 0.6, this.size * 0.6),
-                y: random(-this.size * 0.3, this.size * 0.3),
-                w: random(this.size * 0.5, this.size),
-                h: random(this.size * 0.4, this.size * 0.8),
-                noiseOffset: random(1000)
-            });
-            // Varying whites and light purples
-            this.colors.push(color(random(200, 260), random(5, 15), 100, random(0.01, 0.05)));
-        }
-    }
-
-    update() {
-        this.x += this.speed;
-
-        // Wrap around logic
-        if (this.x - this.size > width) {
-            this.x = -this.size * 2;
-            this.y = random(0, height * 0.7);
-        }
-    }
-
-    display() {
-        noStroke();
-        for (let i = 0; i < this.numCircles; i++) {
-            let off = this.offsets[i];
-            fill(this.colors[i]);
-
-            // Add a bit of movement to individual puffs
-            let xNoise = noise(off.noiseOffset + frameCount * 0.005) * 20 - 10;
-            let yNoise = noise(off.noiseOffset + 100 + frameCount * 0.005) * 10 - 5;
-
-            ellipse(this.x + off.x + xNoise, this.y + off.y + yNoise, off.w, off.h);
-        }
-    }
+    let c = color(this.col);
+    c.setAlpha(this.alpha);
+    fill(c);
+    ellipse(drawX, drawY, drawR * 2, drawR * 2);
+  }
 }
 
 function windowResized() {
-    resizeCanvas(windowWidth, windowHeight);
+  resizeCanvas(windowWidth, windowHeight);
 }
 
-function keyPressed() {
-    if (key === 's' || key === 'S') {
-        saveCanvas('ethereal_clouds', 'png');
+function draw() {
+  background(255);
+
+  if (!svgLoaded || particles.length === 0) return;
+
+  let scl = min(width / SVG_WIDTH, height / SVG_HEIGHT) * 0.75;
+  let baseOffsetX = (width - SVG_WIDTH * scl) / 2;
+  let baseOffsetY = (height - SVG_HEIGHT * scl) / 2;
+
+  let elapsed = millis() - startTime;
+
+  // 散らばりの進行度
+  let loopDuration = 7000; // 全体の1ループの長さ
+  let restDuration = 500; // そのうちロゴのままで静止する時間
+  let animDuration = loopDuration - restDuration; // 動いている時間 (3000ms)
+
+  let progress = 0;
+  if (elapsed > disperseStartTime) {
+    let t = (elapsed - disperseStartTime) % loopDuration;
+
+    if (t < restDuration) {
+      // 静止期間
+      progress = 0;
+    } else {
+      // アニメーション期間（0 -> 1 -> 0）
+      // 残りの時間(animDuration)を使ってsin波の半周期分を描く
+      let animProgress = (t - restDuration) / animDuration;
+      let wave = Math.sin(animProgress * Math.PI);
+
+      // wave^4ほど極端にせずとも、静止を物理的に設けたのである程度自然なカーブにする
+      progress = Math.pow(wave, 10);
     }
+  }
+
+  // パーティクル更新・描画
+  for (let p of particles) {
+    if (progress > 0) {
+      p.update(progress);
+    }
+    p.display(scl, baseOffsetX, baseOffsetY);
+  }
 }
