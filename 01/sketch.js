@@ -1,181 +1,351 @@
-/*
- * CONTEXT: p5.js Creative Coding
- * GOAL: SVGロゴの各円をパーティクルとして定義し、
- *       音が広がるようにゆるやかに飛散するアニメーション
- */
+let mySvg;
+let mySounds = [];  // 音源配列
+let mySound;        // 現在選択中の音源
+let amp;
+let smoothedSize = 1;
+let sizeHistory = []; // サイズの履歴を保持する配列
+let textGraphic;      // テキスト描画用バッファ
 
-let particles = [];
-let svgLoaded = false;
-let disperseStartTime = 500; // 3秒後に広がり始める
-let startTime;
+let myFilter; // フィルターオブジェクト
+let myReverb; // リバーブオブジェクト
+let myDelay;  // ディレイオブジェクト
 
-const SVG_WIDTH = 854;
-const SVG_HEIGHT = 477;
+// Tweakpane用のパラメーター設定
+const PARAMS = {
+    soundSelect: 0,         // 音源選択 (0=sound1, 1=sound2, 2=sound3)
+    volume: 1.0,
+    rate: 1.0,
+    reverbTime: 0,
+    delayTime: 0,
+    delayFeedback: 0.5,
+    filterType: 'off',
+    filterFreq: 10000,
+    filterRes: 1,
+    displayMode: 'svg',     // 'svg' or 'text'
+    textContent: 'HELLO',   // 表示する文字列
+    textFont: 'Helvetica',  // フォント名
+    hue: 330,
+    saturation: 80,
+    maxLayers: 30,          // 重なる最大レイヤー数
+};
+
+function preload() {
+    mySvg = loadImage('logo.svg');
+    // 3つの音源を全て読み込む
+    mySounds[0] = loadSound('sound1.mp3');
+    mySounds[1] = loadSound('sound2.mp3');
+    mySounds[2] = loadSound('sound3.mp3');
+    mySound = mySounds[0]; // 初期選択はsound1
+}
 
 function setup() {
-  createCanvas(windowWidth, windowHeight);
-  startTime = millis();
+    createCanvas(windowWidth, windowHeight);
 
-  fetch('logosvg.svg')
-    .then(res => res.text())
-    .then(svgText => {
-      parseSVG(svgText);
-      svgLoaded = true;
+    // カラーモードをHSB（色相、彩度、明度、透明度）に変更
+    colorMode(HSB, 360, 100, 100, 255);
+
+    amp = new p5.Amplitude();
+
+    // フィルター、リバーブ、ディレイの作成
+    myFilter = new p5.Filter();
+    myReverb = new p5.Reverb();
+    myDelay = new p5.Delay();
+
+    // 初回のルーティングを設定する
+    updateAudioRouting();
+
+    // Tweakpaneの初期化
+    const pane = new Tweakpane.Pane({ title: 'Sound Control' });
+
+    // --- 基本コントロール ---
+    // 音源選択: sound1 / sound2 / sound3
+    pane.addInput(PARAMS, 'soundSelect', {
+        label: 'sound',
+        options: {
+            'Sound1': 0,
+            'Sound2': 1,
+            'Sound3': 2,
+        }
+    }).on('change', (ev) => {
+        let wasPlaying = mySound.isPlaying();
+        mySound.stop();
+        mySound = mySounds[ev.value];
+        mySound.setVolume(PARAMS.volume);
+        mySound.rate(PARAMS.rate);
+        updateAudioRouting();
+        if (wasPlaying) {
+            mySound.loop();
+        }
     });
+
+    // 音量（ボリューム）スライダー: 0.0 〜 1.0
+    pane.addInput(PARAMS, 'volume', { min: 0.0, max: 1.0 }).on('change', (ev) => {
+        mySound.setVolume(ev.value);
+    });
+
+    // 音の高さ・再生速度（ピッチ）スライダー: 0 〜 2.0
+    pane.addInput(PARAMS, 'rate', { min: 0, max: 2.0 }).on('change', (ev) => {
+        mySound.rate(ev.value);
+    });
+
+    // --- フィルターコントロール ---
+    const filterFolder = pane.addFolder({ title: 'DJ Filter' });
+
+    // フィルタータイプ選択: Off / LowPass / HighPass
+    filterFolder.addInput(PARAMS, 'filterType', {
+        options: {
+            'Off (フィルターなし)': 'off',
+            'LowPass (こもった音)': 'lowpass',
+            'HighPass (軽い音)': 'highpass',
+        }
+    }).on('change', (ev) => {
+        if (ev.value !== 'off') {
+            myFilter.setType(ev.value);
+        }
+        updateAudioRouting();
+    });
+
+    // カットオフ周波数: 20Hz 〜 10000Hz
+    filterFolder.addInput(PARAMS, 'filterFreq', {
+        label: 'cutoff',
+        min: 20,
+        max: 10000,
+    }).on('change', (ev) => {
+        myFilter.freq(ev.value);
+    });
+
+    // レゾナンス（共鳴の強さ）: 0.1 〜 20
+    filterFolder.addInput(PARAMS, 'filterRes', {
+        label: 'resonance',
+        min: 0.1,
+        max: 20,
+    }).on('change', (ev) => {
+        myFilter.res(ev.value);
+    });
+
+    // --- 空間・残響効果コントロール ---
+    const fxFolder = pane.addFolder({ title: 'Spatial FX' });
+
+    // リバーブタイム（空間の広さ）: 0 〜 10 秒
+    fxFolder.addInput(PARAMS, 'reverbTime', {
+        label: 'reverb',
+        min: 0,
+        max: 10,
+    }).on('change', (ev) => {
+        updateAudioRouting();
+    });
+
+    // ディレイタイム（やまびこの遅れ）: 0 〜 1.0 秒
+    fxFolder.addInput(PARAMS, 'delayTime', {
+        label: 'delay time',
+        min: 0,
+        max: 1.0,
+    }).on('change', (ev) => {
+        updateAudioRouting();
+    });
+
+    // ディレイフィードバック（繰り返す量）: 0 〜 0.8
+    fxFolder.addInput(PARAMS, 'delayFeedback', {
+        label: 'delay feedback',
+        min: 0,
+        max: 0.8,
+    }).on('change', (ev) => {
+        if (myDelay) {
+            myDelay.feedback(ev.value);
+        }
+    });
+
+    // --- ビジュアルコントロール ---
+    const visualFolder = pane.addFolder({ title: 'Visual' });
+
+    // 表示モード選択: SVG / Text
+    visualFolder.addInput(PARAMS, 'displayMode', {
+        label: 'mode',
+        options: {
+            'SVG': 'svg',
+            'Text': 'text',
+        }
+    }).on('change', () => {
+        if (PARAMS.displayMode === 'text') {
+            updateTextGraphic();
+        }
+    });
+
+    // テキスト入力
+    visualFolder.addInput(PARAMS, 'textContent', {
+        label: 'text',
+    }).on('change', () => {
+        updateTextGraphic();
+    });
+
+    // フォント選択
+    visualFolder.addInput(PARAMS, 'textFont', {
+        label: 'font',
+        options: {
+            'Helvetica': 'Helvetica',
+            'Helvetica Condensed Bold': 'HelveticaNeue-CondensedBold',
+            'Arial': 'Arial',
+            'Georgia': 'Georgia',
+            'Courier New': 'Courier New',
+            'Times New Roman': 'Times New Roman',
+            'Impact': 'Impact',
+            'Futura': 'Futura',
+            'Hiragino Sans': 'Hiragino Sans',
+            'Hiragino Mincho': 'Hiragino Mincho ProN',
+        }
+    }).on('change', () => {
+        updateTextGraphic();
+    });
+
+    // 重なる最大レイヤー数: 1 〜 40
+    visualFolder.addInput(PARAMS, 'maxLayers', {
+        label: 'layers',
+        min: 1,
+        max: 40,
+        step: 1,
+    });
+
+    // --- カラーコントロール ---
+    const colorFolder = pane.addFolder({ title: 'Color' });
+
+    // 色相 (Hue): 0〜360
+    colorFolder.addInput(PARAMS, 'hue', { min: 0, max: 360 });
+
+    // 彩度 (Saturation): 0〜100
+    colorFolder.addInput(PARAMS, 'saturation', { min: 0, max: 100 });
+
+    // --- スナップショット ---
+    pane.addButton({ title: '📷 Snapshot' }).on('click', () => {
+        saveCanvas('snapshot', 'png');
+    });
+
+    let btn = createButton('Play / Pause');
+    btn.position(10, 10);
+    btn.mousePressed(togglePlay);
+
+    imageMode(CENTER);
+
+    // 初回のテキストバッファを生成
+    updateTextGraphic();
 }
 
-function parseSVG(svgText) {
-  let parser = new DOMParser();
-  let doc = parser.parseFromString(svgText, 'image/svg+xml');
-  let paths = doc.querySelectorAll('path');
+// テキストをオフスクリーンバッファに描画する関数
+function updateTextGraphic() {
+    // テキストのサイズを大きくして高解像度で描画
+    let tempSize = 500;
+    let pg = createGraphics(1, 1);
+    pg.textFont(PARAMS.textFont);
+    pg.textSize(tempSize);
+    let tw = pg.textWidth(PARAMS.textContent);
+    let th = tempSize;
+    pg.remove();
 
-  // 一時SVGをDOMに追加してBBox計算
-  let tempSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  tempSvg.setAttribute('width', SVG_WIDTH);
-  tempSvg.setAttribute('height', SVG_HEIGHT);
-  tempSvg.setAttribute('viewBox', '0 0 ' + SVG_WIDTH + ' ' + SVG_HEIGHT);
-  tempSvg.style.position = 'absolute';
-  tempSvg.style.top = '-9999px';
-  tempSvg.style.left = '-9999px';
-  document.body.appendChild(tempSvg);
+    // 余白をつけてバッファを作成
+    let padding = 40;
+    let bufW = ceil(tw + padding * 2);
+    let bufH = ceil(th + padding * 2);
+    if (bufW < 1) bufW = 100;
+    if (bufH < 1) bufH = 100;
 
-  // ロゴの中心を計算
-  let logoCenterX = SVG_WIDTH / 2;
-  let logoCenterY = SVG_HEIGHT / 2;
-
-  paths.forEach((pathEl) => {
-    let cloned = pathEl.cloneNode(true);
-    tempSvg.appendChild(cloned);
-
-    let bbox = cloned.getBBox();
-    let cx = bbox.x + bbox.width / 2;
-    let cy = bbox.y + bbox.height / 2;
-    let r = Math.max(bbox.width, bbox.height) / 2;
-
-    let hasClass = pathEl.classList.contains('cls-1');
-    let fillColor = hasClass ? '#005991' : '#000000';
-
-    // 中心からの距離（波紋の遅延計算用）
-    let dx = cx - logoCenterX;
-    let dy = cy - logoCenterY;
-    let distFromCenter = Math.sqrt(dx * dx + dy * dy);
-
-    particles.push(new Particle(cx, cy, r, fillColor, distFromCenter));
-
-    tempSvg.removeChild(cloned);
-  });
-
-  document.body.removeChild(tempSvg);
+    textGraphic = createGraphics(bufW, bufH);
+    textGraphic.pixelDensity(displayDensity()); // ディスプレイの解像度に合わせる
+    textGraphic.clear();
+    textGraphic.fill(255); // 白色で描画（tintで色を乗せるため）
+    textGraphic.noStroke();
+    textGraphic.textFont(PARAMS.textFont);
+    textGraphic.textSize(tempSize);
+    textGraphic.textAlign(CENTER, CENTER);
+    textGraphic.text(PARAMS.textContent, bufW / 2, bufH / 2);
 }
 
-class Particle {
-  constructor(x, y, r, col, distFromCenter) {
-    this.originalX = x;
-    this.originalY = y;
-    this.r = r;
-    this.col = col;
-    this.distFromCenter = distFromCenter;
+// 音声ルーティング（接続）を確実に更新する関数
+function updateAudioRouting() {
+    // 既存の接続をすべてリセット
+    mySound.disconnect();
+    myFilter.disconnect();
+    myReverb.disconnect();
+    myDelay.disconnect();
 
-    // 散らばる方向（中心からの角度 + 少しランダム）
-    let angle = Math.atan2(
-      y - SVG_HEIGHT / 2,
-      x - SVG_WIDTH / 2
-    ) + (Math.random() - 0.5) * 4;
+    // エフェクトのソース（生の音 or フィルターを通した音）を決める
+    let fxSource = mySound;
 
-    this.dirX = Math.cos(angle);
-    this.dirY = Math.sin(angle);
+    if (PARAMS.filterType === 'off') {
+        mySound.connect(); // マスター出力へ
+    } else {
+        mySound.connect(myFilter); // フィルターへ
+        myFilter.connect();        // フィルターからマスター出力へ
+        fxSource = myFilter;       // エフェクトのソースはフィルターの出力
+    }
 
-    // 散らばる速度（ゆるやかに）
-    this.speed = 0.3 + Math.random() * 2;
+    // リバーブが有効な場合のみ接続
+    if (PARAMS.reverbTime > 0) {
+        myReverb.process(fxSource, PARAMS.reverbTime, 2);
+        myReverb.connect();
+    }
 
-    // 現在のオフセット
-    this.offsetX = 0;
-    this.offsetY = 0;
-
-    // 不透明度
-    this.alpha = 255;
-  }
-
-  update(progress) {
-    // progressは0〜1の往復（0=ロゴ状態, 1=広がりきった状態）
-    // ループ側の計算で、ロゴ状態で長く・広がった状態で短くなるよう調整済みなので、
-    // ここでは素直に progress を移動量に反映させる（少しだけease-outを残す）
-    let eased = progress; // または 1 - Math.pow(1 - progress, 2) などで微調整可能
-
-    // 移動量
-    let moveAmount = eased * 800 * this.speed;
-    this.offsetX = this.dirX * moveAmount;
-    this.offsetY = this.dirY * moveAmount;
-
-    // スケール（広がったときにサイズを大きくする）
-    // 元のサイズの最大3倍まで大きくなるように設定（好みで数値を調整）
-    this.currentR = this.r * (1 + progress * 4);
-
-    // フェードアウト（ゆるやかに透過する）
-    this.alpha = lerp(255, 255, progress);
-  }
-
-  display(scl, baseOffsetX, baseOffsetY) {
-    if (this.alpha <= 0) return;
-
-    let drawX = (this.originalX * scl + baseOffsetX) + this.offsetX * scl;
-    let drawY = (this.originalY * scl + baseOffsetY) + this.offsetY * scl;
-
-    // progressに基づいた現在の半径を使う
-    let rToUse = this.currentR !== undefined ? this.currentR : this.r;
-    let drawR = rToUse * scl;
-
-    noStroke();
-    let c = color(this.col);
-    c.setAlpha(this.alpha);
-    fill(c);
-    ellipse(drawX, drawY, drawR * 2, drawR * 2);
-  }
-}
-
-function windowResized() {
-  resizeCanvas(windowWidth, windowHeight);
+    // ディレイが有効な場合のみ接続
+    if (PARAMS.delayTime > 0) {
+        myDelay.process(fxSource, PARAMS.delayTime, PARAMS.delayFeedback, 2300);
+        myDelay.connect();
+    }
 }
 
 function draw() {
-  background(255);
+    background(255);
 
-  if (!svgLoaded || particles.length === 0) return;
+    // 現在の音量を取得してサイズにマッピング
+    let level = amp.getLevel();
 
-  let scl = min(width / SVG_WIDTH, height / SVG_HEIGHT) * 0.75;
-  let baseOffsetX = (width - SVG_WIDTH * scl) / 2;
-  let baseOffsetY = (height - SVG_HEIGHT * scl) / 2;
+    // 音量の反応を激しくするため、入力の上限を0.4などに狭め、出力サイズを大きく設定する
+    let targetSize = map(level, 0, 0.1, 0, 300);
 
-  let elapsed = millis() - startTime;
+    // 値の変化に対する追従を早くして、キビキビと激しく動くようにする（0.1 → 0.4）
+    smoothedSize = lerp(smoothedSize, targetSize, 0.2);
 
-  // 散らばりの進行度
-  let loopDuration = 7000; // 全体の1ループの長さ
-  let restDuration = 500; // そのうちロゴのままで静止する時間
-  let animDuration = loopDuration - restDuration; // 動いている時間 (3000ms)
+    // 現在のサイズを履歴に追加
+    sizeHistory.push(smoothedSize);
+    // 履歴がmaxLayersを超えたら古いものを削除（whileで即座に反映）
+    while (sizeHistory.length > PARAMS.maxLayers) {
+        sizeHistory.shift();
+    }
 
-  let progress = 0;
-  if (elapsed > disperseStartTime) {
-    let t = (elapsed - disperseStartTime) % loopDuration;
+    blendMode(DIFFERENCE);
 
-    if (t < restDuration) {
-      // 静止期間
-      progress = 0;
+    // 表示モードに応じて描画対象とアスペクト比を決定
+    let displayImg;
+    let aspect;
+    if (PARAMS.displayMode === 'svg') {
+        displayImg = mySvg;
+        aspect = mySvg.height / mySvg.width;
     } else {
-      // アニメーション期間（0 -> 1 -> 0）
-      // 残りの時間(animDuration)を使ってsin波の半周期分を描く
-      let animProgress = (t - restDuration) / animDuration;
-      let wave = Math.sin(animProgress * Math.PI);
-
-      // wave^4ほど極端にせずとも、静止を物理的に設けたのである程度自然なカーブにする
-      progress = Math.pow(wave, 10);
+        displayImg = textGraphic;
+        aspect = textGraphic.height / textGraphic.width;
     }
-  }
 
-  // パーティクル更新・描画
-  for (let p of particles) {
-    if (progress > 0) {
-      p.update(progress);
+    // 古い履歴から順に描画（古いものが奥、新しいものが手前）
+    for (let i = 0; i < sizeHistory.length; i++) {
+        let alpha = map(i, 0, sizeHistory.length - 1, 30, 255);
+
+        // PARAMSの色設定を使ってtintを適用
+        tint(PARAMS.hue, PARAMS.saturation, 100, 255);
+
+        // 横幅はそのまま、縦幅にアスペクト比を掛けて元の比率を維持する
+        image(displayImg, width / 2, height / 2, sizeHistory[i], sizeHistory[i] * aspect);
     }
-    p.display(scl, baseOffsetX, baseOffsetY);
-  }
+
+    blendMode(BLEND);
+    noTint();
+}
+
+function windowResized() {
+    resizeCanvas(windowWidth, windowHeight);
+}
+
+// 再生・停止の切り替え関数
+function togglePlay() {
+    if (mySound.isPlaying()) {
+        mySound.pause();
+    } else {
+        mySound.loop();
+    }
 }
