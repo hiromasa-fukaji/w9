@@ -2,53 +2,30 @@
 <html lang="ja">
 
 <head>
-    <meta charset="UTF-8">
-    <title>index.html</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
-    <style>
-        body {
-            margin: 0;
-            padding: 0;
-            background-color: #ffffff;
-            /* Soft dark blue base */
-            overflow: hidden;
-            font-family: 'Inter', sans-serif;
-        }
+  <meta charset="UTF-8">
+  <title>index.html</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body {
+      margin: 0;
+      background: #797979;
+      overflow: hidden;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      width: 100vw;
+      height: 100vh;
+    }
 
-        canvas {
-            display: block;
-        }
-
-        .ui-container {
-            position: fixed;
-            top: 20px;
-            left: 20px;
-            color: white;
-            pointer-events: none;
-            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
-            z-index: 10;
-        }
-
-        h1 {
-            margin: 0;
-            font-size: 1.2rem;
-            font-weight: 600;
-            letter-spacing: 0.1em;
-            opacity: 0.8;
-        }
-    </style>
+    canvas {
+      display: block;
+    }
+  </style>
 </head>
 
 <body>
-    <div class="ui-container">
-    </div>
-    <script src="https://cdn.jsdelivr.net/npm/tweakpane@3.1.9/dist/tweakpane.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/addons/p5.sound.min.js"></script>
-    <script src="sketch.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+  <script src="sketch.js"></script>
 </body>
 
 </html>
